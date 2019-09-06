@@ -12,7 +12,7 @@ import tensorflow as tf
 import queue # to get sensor data
 import rl_utils
 from rl_utils import DDDQNet, SumTree, Memory, map_action, reset_environment, process_image, compute_reward, isDone
-
+from rl_config import hyperParameters
 
 def render(clock, world, display):
     clock.tick_busy_loop(30) # this sets the maximum client fps
@@ -48,42 +48,18 @@ def control_loop(vehicle_id, host, port):
 
         sensors = rl_utils.Sensors(world, vehicle)
 
-        # ==============================================================================
-        # -- Hyperparameters ----------------------------------------------------------
-        # ==============================================================================
-        state_size = [84, 84, 1]
-        action_size = 6
-        possible_actions = np.identity(6, dtype=int).tolist()
-        learning_rate= 0.00025
+        rl_config = hyperParameters(load_memory = False) # algorithm hyperparameters
 
-        # Training parameters
-        total_episodes = 5001  # INTIALLY  5000
-        max_steps = 5000
-        batch_size = 64
-
-        # Fixed Q target hyper parameters
-        max_tau = 5000  # tau is the C step where we update out target network -- INTIALLY 10000
-
-        # exploration hyperparamters for ep. greedy. startegy
-        explore_start = 1.0  # exploration probability at start
-        explore_stop = 0.01  # minimum exploration probability
-        decay_rate = 0.00005  # exponential decay rate for exploration prob
-
-        # Q LEARNING hyperparameters
-        gamma = 0.95  # Discounting rate
-        pretrain_length = 200000  ## Number of experiences stored in the Memory when initialized for the first time --INTIALLY 100k
-        memory_size = 200000  # Number of experiences the Memory can keep  --INTIALLY 100k
-        load_memory= False
         # ==============================================================================
         # -- tensorflow init
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
+        configProto = tf.ConfigProto()
+        configProto.gpu_options.allow_growth = True
         # reset tensorflow graph
         tf.reset_default_graph()
         # instantiate the DQNetwork
-        DQNetwork = DDDQNet(state_size, action_size, learning_rate, name="DQNetwork")
+        DQNetwork = DDDQNet(rl_config.state_size, rl_config.action_size, rl_config.learning_rate, name="DQNetwork")
         # instantiate the target network
-        TargetNetwork = DDDQNet(state_size, action_size, learning_rate, name="TargetNetwork")
+        TargetNetwork = DDDQNet(rl_config.state_size, rl_config.action_size, rl_config.learning_rate, name="TargetNetwork")
 
         #tensorflow summary for tensorboar visualization
         writer = tf.summary.FileWriter("./summaries/waypoint/5th")
@@ -95,8 +71,8 @@ def control_loop(vehicle_id, host, port):
         saver = tf.train.Saver()
 
         # initialize memory and fill it with examples, for prioritized replay
-        memory = Memory(memory_size, pretrain_length, action_size)
-        if load_memory:
+        memory = Memory(rl_config.memory_size, rl_config.pretrain_length, rl_config.action_size)
+        if rl_config.load_memory:
             memory = memory.load_memory("./replay_memory/memory_aftertrain.pkl")
             print("Memory Loaded")
         else:
@@ -105,7 +81,7 @@ def control_loop(vehicle_id, host, port):
             memory.save_memory("./replay_memory/memory.pkl", memory)
 
         # Reinforcement Learning loop
-        with tf.Session(config=config) as sess:
+        with tf.Session(config=configProto) as sess:
             sess.run(tf.global_variables_initializer())
             writer.add_graph(sess.graph)
 
@@ -116,7 +92,7 @@ def control_loop(vehicle_id, host, port):
             update_target = update_target_graph()
             sess.run(update_target)
 
-            for episode in range(total_episodes):
+            for episode in range(rl_config.total_episodes):
                 # move the vehicle to a spawn_point and return state
                 reset_environment(map, vehicle, sensors)
                 state = process_image(sensors.camera_queue)
@@ -124,13 +100,13 @@ def control_loop(vehicle_id, host, port):
                 start = time.time()
                 score = 0
 
-                for step in range(max_steps):
+                for step in range(rl_config.max_steps):
                     tau += 1
                     decay_step += 1
 
-                    action_int, action, explore_probability = DQNetwork.predict_action(sess, explore_start,
-                                                                             explore_stop, decay_rate,
-                                                                             decay_step, state, action_size)
+                    action_int, action, explore_probability = DQNetwork.predict_action(sess, rl_config.explore_start,
+                                                                             rl_config.explore_stop, rl_config.decay_rate,
+                                                                             decay_step, state, rl_config.action_size)
                     car_controls = map_action(action_int)
                     vehicle.apply_control(car_controls)
                     time.sleep(0.25)
