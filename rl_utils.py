@@ -26,7 +26,7 @@ class Sensors(object):
 
         self.camera_rgb = self.add_sensors(world, vehicle, 'sensor.camera.rgb')
         self.collision = self.add_sensors(world, vehicle, 'sensor.other.collision')
-
+        self.lane_invasion = self.add_sensors(world, vehicle, 'sensor.other.lane_invasion')
 
         self.collision.listen(lambda collisionEvent: self.track_collision(collisionEvent))
         self.camera_rgb.listen(lambda image: self.camera_queue.put(image))
@@ -458,8 +458,8 @@ def map_action(action):
 
 def reset_environment(map, vehicle, sensors):
     ''' Set the vehicle velocities to 0 and move it to a spawn point'''
-    vehicle.set_velocity(carla.Vector3D(0,0,0))
-    vehicle.set_angular_velocity(carla.Vector3D(0,0,0))
+    vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
+    time.sleep(1)
     spawn_points = map.get_spawn_points()
     spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
     vehicle.set_transform(spawn_point)
@@ -490,15 +490,15 @@ def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
     speed_reward = (abs(vehicle_speed) - min_speed) / (max_speed - min_speed)
     lane_reward = 0
 
-    if vehicle_speed > max_speed:
-        speed_reward = 0
+    if (vehicle_speed > max_speed) or (vehicle_speed < min_speed):
+        speed_reward = -0.1
 
     # if lane_sensor.lane_crossed:
     #     if lane_sensor.type == "'Broken'":
     #         lane_reward = -0.5
     #
-    if sensors.collision_flag or speed.x == 0:
-        return -1
+    if sensors.collision_flag:
+        return -10
 
     else:
         return speed_reward + lane_reward
@@ -506,7 +506,7 @@ def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
 
 def isDone(reward):
     '''Return True if the episode is finished'''
-    if reward <= -1:
+    if reward <= -10:
         return True
     else:
         return False
