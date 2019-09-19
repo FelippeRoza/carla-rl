@@ -4,6 +4,7 @@ import carla
 import random
 import time
 import queue
+import pickle
 from PIL import Image
 
 # ==============================================================================
@@ -195,7 +196,7 @@ class DDDQNet():
 
             # choose the best Q value from the discrete action space (argmax)
             action_int = np.argmax(Qs)
-            action = possible_actions[int(action_int)]
+            action = self.possible_actions[int(action_int)]
 
         return action_int, action, explore_probability
 
@@ -432,6 +433,22 @@ class Memory(object):
 # -- Functions -----------------------------------------------------------------
 # ==============================================================================
 
+def get_split_batch(batch):
+    '''memory.sample() returns a batch of experiences, but we want an array
+    for each element in the memory (s, a, r, s', done)'''
+
+    states_mb = np.array([each[0][0] for each in batch], ndmin=3)
+    # print(states_mb.shape) #shape 64*84*84*1 after reshaping im_final -- 64 is the batch size
+    actions_mb = np.array([each[0][1] for each in batch])
+    # print(actions_mb.shape)
+    rewards_mb = np.array([each[0][2] for each in batch])
+    # print(rewards_mb.shape) #shape (64,)
+    next_states_mb = np.array([each[0][3] for each in batch], ndmin=3)
+    # print(next_states_mb.shape)
+    dones_mb = np.array([each[0][4] for each in batch])
+
+    return states_mb, actions_mb, rewards_mb, next_states_mb, dones_mb
+
 def map_action(action):
     """ maps discrete actions into actual values to control the car"""
     control = carla.VehicleControl()
@@ -496,7 +513,7 @@ def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
     if sensors.lane_crossed:
         if sensors.lane_crossed_type == "'Broken'" or sensors.lane_crossed_type == "'NONE'":
             lane_reward = -0.5
-            self.lane_crossed = False
+            sensors.lane_crossed = False
 
     if sensors.collision_flag:
         return -1

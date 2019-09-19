@@ -11,7 +11,8 @@ import numpy as np
 import tensorflow as tf
 import queue # to get sensor data
 import rl_utils
-from rl_utils import DDDQNet, SumTree, Memory, map_action, reset_environment, process_image, compute_reward, isDone
+from rl_utils import DDDQNet, SumTree, Memory, map_action, reset_environment
+from rl_utils import process_image, compute_reward, isDone, get_split_batch
 from rl_config import hyperParameters
 
 def render(clock, world, display):
@@ -24,7 +25,7 @@ def render(clock, world, display):
 def update_target_graph():
     # This function helps to copy one set of variables to another
     # In our case we use it when we want to copy the parameters of DQN to Target_network
-    # Thanks of the very good implementation of Arthur Juliani https://github.com/awjuliani
+    # Thanks to Arthur Juliani https://github.com/awjuliani
 
     from_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "DQNetwork")
     to_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "TargetNetwork")
@@ -48,7 +49,7 @@ def control_loop(vehicle_id, host, port):
 
         sensors = rl_utils.Sensors(world, vehicle)
 
-        rl_config = hyperParameters(load_memory = False) # algorithm hyperparameters
+        rl_config = hyperParameters(load_memory = True) # algorithm hyperparameters
 
         # ==============================================================================
         # -- tensorflow init
@@ -61,8 +62,8 @@ def control_loop(vehicle_id, host, port):
         # instantiate the target network
         TargetNetwork = DDDQNet(rl_config.state_size, rl_config.action_size, rl_config.learning_rate, name="TargetNetwork")
 
-        #tensorflow summary for tensorboar visualization
-        writer = tf.summary.FileWriter("./summaries/waypoint/5th")
+        #tensorflow summary for tensorboard visualization
+        writer = tf.summary.FileWriter(".rl/summary")
         # losses
         tf.summary.scalar("Loss", DQNetwork.loss)
         tf.summary.scalar("Hubor_loss", DQNetwork.loss_2)
@@ -73,12 +74,12 @@ def control_loop(vehicle_id, host, port):
         # initialize memory and fill it with examples, for prioritized replay
         memory = Memory(rl_config.memory_size, rl_config.pretrain_length, rl_config.action_size)
         if rl_config.load_memory:
-            memory = memory.load_memory("./replay_memory/memory_aftertrain.pkl")
+            memory = memory.load_memory(rl_config.memory_load_path)
             print("Memory Loaded")
         else:
             #this can take a looong time
             memory.fill_memory(map, vehicle, sensors.camera_queue, sensors)
-            memory.save_memory("./replay_memory/memory.pkl", memory)
+            memory.save_memory(rl_config.memory_save_path, memory)
 
         # Reinforcement Learning loop
         with tf.Session(config=configProto) as sess:
@@ -92,13 +93,17 @@ def control_loop(vehicle_id, host, port):
             update_target = update_target_graph()
             sess.run(update_target)
 
-            for episode in range(rl_config.total_episodes):
+            for episode in range(1, rl_config.total_episodes):
                 # move the vehicle to a spawn_point and return state
                 reset_environment(map, vehicle, sensors)
                 state = process_image(sensors.camera_queue)
                 done = False
                 start = time.time()
-                score = 0
+                episode_reward = 0
+                # save the model from time to time
+                if rl_config.model_save_frequency:
+                    if episode % rl_config.model_save_frequency == 0:
+                        save_path = saver.save(sess, rl_config.model_save_path)
 
                 for step in range(rl_config.max_steps):
                     tau += 1
@@ -110,9 +115,65 @@ def control_loop(vehicle_id, host, port):
                     car_controls = map_action(action_int)
                     vehicle.apply_control(car_controls)
                     time.sleep(0.25)
+                    next_state = process_image(sensors.camera_queue)
 
-                    reward = compute_reward()
+                    reward = compute_reward(vehicle, sensors)
+                    episode_reward += reward
                     done = isDone(reward)
+
+                    experience = state, action, reward, next_state, done
+                    memory.store(experience)
+
+                    # Lets learn
+
+                    # First we need a mini-batch with experiences (s, a, r, s', done)
+                    tree_idx, batch, ISWeights_mb = memory.sample(rl_config.batch_size)
+                    s_mb, a_mb, r_mb, next_s_mb, dones_mb = get_split_batch(batch)
+
+                    # Get Q values for next_state from the DQN and TargetNetwork
+                    q_next_state = sess.run(DQNetwork.output, feed_dict={DQNetwork.inputs_: next_s_mb})
+
+                    q_target_next_state = sess.run(TargetNetwork.output,
+                                                   feed_dict={TargetNetwork.inputs_: next_s_mb})
+                    # Set Q_target = r if the episode ends at s+1, otherwise Q_target = r + gamma * Qtarget(s',a')
+                    target_Qs_batch = []
+                    for i in range(0, len(dones_mb)):
+                        terminal = dones_mb[i]
+                        # we got a'
+                        action = np.argmax(q_next_state[i])
+                        # if we are in a terminal state. only equals reward
+                        if terminal:
+                            target_Qs_batch.append((r_mb[i]))
+                        else:
+                            # take the Q taregt for action a'
+                            target = r_mb[i] + rl_config.gamma * q_target_next_state[i][action]
+                            target_Qs_batch.append(target)
+
+                    targets_mb = np.array([each for each in target_Qs_batch])
+
+                    _, _, loss, loss_2, absolute_errors = sess.run(
+                        [DQNetwork.optimizer, DQNetwork.optimizer_2, DQNetwork.loss, DQNetwork.loss_2,
+                         DQNetwork.absolute_errors],
+                        feed_dict={DQNetwork.inputs_: s_mb,
+                                   DQNetwork.target_Q: targets_mb,
+                                   DQNetwork.actions_: a_mb,
+                                   DQNetwork.ISWeights_: ISWeights_mb})
+
+                    # update replay memory priorities
+                    memory.batch_update(tree_idx, absolute_errors)
+
+                    if tau > rl_config.max_tau:
+                        update_target = update_target_graph()
+                        sess.run(update_target)
+                        m += 1
+                        tau = 0
+                        print("model updated")
+
+                    state = next_state
+
+                    if done:
+                        print(episode, 'episode finished. Episode total reward:', episode_reward)
+                        break
 
     finally:
         for actor in actor_list:
