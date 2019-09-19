@@ -22,14 +22,17 @@ class Sensors(object):
         self.world = world
         self.vehicle = vehicle
         self.camera_queue = queue.Queue() # queue to store images from buffer
-        self.collision_flag = False # queue to store images from buffer
+        self.collision_flag = False # Flag for colision detection
+        self.lane_crossed = False # Flag for lane crossing detection
+        self.lane_crossed_type = '' # Which type of lane was crossed
 
         self.camera_rgb = self.add_sensors(world, vehicle, 'sensor.camera.rgb')
         self.collision = self.add_sensors(world, vehicle, 'sensor.other.collision')
-        self.lane_invasion = self.add_sensors(world, vehicle, 'sensor.other.lane_invasion')
+        self.lane_invasion = self.add_sensors(world, vehicle, 'sensor.other.lane_invasion', sensor_tick = '0.5')
 
         self.collision.listen(lambda collisionEvent: self.track_collision(collisionEvent))
         self.camera_rgb.listen(lambda image: self.camera_queue.put(image))
+        self.lane_invasion.listen(lambda event: self.on_invasion(event))
 
     def add_sensors(self, world, vehicle, type, sensor_tick = '0.0'):
 
@@ -50,9 +53,18 @@ class Sensors(object):
         '''Whenever a collision occurs, the flag is set to True'''
         self.collision_flag = True
 
-    def reset_collision(self):
-        '''Sets collision flag to False'''
+    def reset_sensors(self):
+        '''Sets all sensor flags to False'''
         self.collision_flag = False
+        self.lane_crossed = False
+        self.lane_crossed_type = ''
+
+    def on_invasion(self, event):
+        '''Whenever the car crosses the lane, the flag is set to True'''
+        lane_types = set(x.type for x in event.crossed_lane_markings)
+        text = ['%r' % str(x).split()[-1] for x in lane_types]
+        self.lane_crossed_type = text[0]
+        self.lane_crossed = True
 
 # ==============================================================================
 # -- Function approximation models ---------------------------------------------
@@ -61,11 +73,8 @@ class Sensors(object):
 class DDDQNet():
     """This is a model for the Dueling Double Deep Q-learning method:
     The input is an image (state representation)
-    It passes through 3 convnets
-    Then it is flatened
-    Then it is divided into 2 streams
-    One that calculates the value function V(s)
-    The other that calculates the advantage function A(s,a)
+    It passes through 3 convnets, then it's flatened, then it's divided into 2 streams:
+    One calculates the value function V(s) and other for the advantage function A(s,a)
     In the end an agregating layer outputs the Q values for each action, Q(s, a)"""
 
     # THIS IS AN UPDATED VERSION, WHERE THE NUMBER OF FILTERS IS CHANGED AND THE ACTIVATION FUNCTION AS WELL
@@ -80,9 +89,7 @@ class DDDQNet():
         # we will use tf.variable_scope here to know which network we're usuing(DQN or target_net)
         # it will be useful when we update ourw-parameters (by copy the DQN parameters)
         with tf.variable_scope(self.name):
-            # create placeholders.,
             # *state_size means that we take each element of state size in tuple hence is like if we wrote [None, 84,84,1]
-            # NOT SURE ABOUT IT
             self.inputs_ = tf.placeholder(tf.float32, [None, *state_size], name="inputs")
             self.ISWeights_ = tf.placeholder(tf.float32, [None, 1], name="IS_Weights")
             self.actions_ = tf.placeholder(tf.float32, [None, action_size], name="actions_")
@@ -106,7 +113,6 @@ class DDDQNet():
                                           kernel_initializer=tf.variance_scaling_initializer(),
                                           padding="valid", activation=tf.nn.relu,
                                           name="conv1")
-            # self.conv1_out = tf.nn.relu(self.conv1, name="conv1_out")
 
             """
             second conv net CNN ELU
@@ -119,7 +125,6 @@ class DDDQNet():
                                           padding="valid", activation=tf.nn.relu,
                                           name="conv2")
 
-            # self.conv2_out = tf.nn.relu(self.conv2, name="conv2_out")
             """
             Third conv net CNN ELU
             out put size 7*7*64
@@ -135,7 +140,6 @@ class DDDQNet():
             self.flatten = tf.layers.flatten(self.conv3)
 
             """Value function V(s) computation layers"""
-
             self.value_fc = tf.layers.dense(inputs=self.flatten,
                                             units=1024, activation=tf.nn.relu,  # 7*7*64 = 3136
                                             kernel_initializer=tf.variance_scaling_initializer(),
@@ -151,31 +155,28 @@ class DDDQNet():
                                                 activation=tf.nn.relu,
                                                 kernel_initializer=tf.variance_scaling_initializer(),
                                                 name="advantage_fc")
-
             self.advantage = tf.layers.dense(inputs=self.advantage_fc,
                                              units=self.action_size,
                                              activation=None,
                                              kernel_initializer=tf.variance_scaling_initializer(),
                                              name="advantage")
+
             """
             Agregating layer
             Q(s,a) = V(s) + (A(s,a) - 1/|A| * sum A(s,a'))
             """
-
             self.output = self.value + tf.subtract(self.advantage,
                                                    tf.reduce_mean(self.advantage, axis=1, keep_dims=True))
             self.output = tf.identity(self.output, name="output")
             # Q is out predicted value
             self.Q = tf.reduce_sum(tf.multiply(self.output, self.actions_), axis=1)
-
             # the loss is modified because of PER
-            """We want to take in priority experience where there is a big difference between our prediction and the TD target,
-             since it means that we have a lot to learn about it."""
-            self.absolute_errors = tf.abs(self.target_Q - self.Q)  # for updating sumtree
 
+            """We want to take in priority experience where there is a big difference between
+            our prediction and the TD target, since it means that we have a lot to learn about it."""
+            self.absolute_errors = tf.abs(self.target_Q - self.Q)  # for updating sumtree
             self.loss = tf.reduce_mean(self.ISWeights_ * tf.squared_difference(self.target_Q, self.Q))
             self.loss_2 = tf.reduce_mean(tf.losses.huber_loss(labels=self.target_Q, predictions=self.Q))
-
             self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
             self.optimizer_2 = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss_2)
 
@@ -459,12 +460,12 @@ def map_action(action):
 def reset_environment(map, vehicle, sensors):
     ''' Set the vehicle velocities to 0 and move it to a spawn point'''
     vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
-    time.sleep(1)
+    time.sleep(1) # wait for the car to stop
     spawn_points = map.get_spawn_points()
     spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
     vehicle.set_transform(spawn_point)
-    time.sleep(2)
-    sensors.reset_collision() # set collision flag to False
+    time.sleep(2) # wait for the car to spawn
+    sensors.reset_sensors() # set sensor flags to False
 
 
 def process_image(queue):
@@ -483,7 +484,6 @@ def process_image(queue):
 def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
     max_speed = 14
     min_speed = 2
-
     speed = vehicle.get_velocity()
     vehicle_speed = np.linalg.norm([speed.x, speed.y, speed.z])
 
@@ -491,14 +491,15 @@ def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
     lane_reward = 0
 
     if (vehicle_speed > max_speed) or (vehicle_speed < min_speed):
-        speed_reward = -0.1
+        speed_reward = -0.05
 
-    # if lane_sensor.lane_crossed:
-    #     if lane_sensor.type == "'Broken'":
-    #         lane_reward = -0.5
-    #
+    if sensors.lane_crossed:
+        if sensors.lane_crossed_type == "'Broken'" or sensors.lane_crossed_type == "'NONE'":
+            lane_reward = -0.5
+            self.lane_crossed = False
+
     if sensors.collision_flag:
-        return -10
+        return -1
 
     else:
         return speed_reward + lane_reward
@@ -506,7 +507,7 @@ def compute_reward(vehicle, sensors):#, collision_sensor, lane_sensor):
 
 def isDone(reward):
     '''Return True if the episode is finished'''
-    if reward <= -10:
+    if reward <= -1:
         return True
     else:
         return False
