@@ -1,3 +1,5 @@
+import sys
+sys.path.append("..") # Add parent directory to path
 import manual_control
 import carla
 import time
