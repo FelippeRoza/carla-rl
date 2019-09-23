@@ -31,6 +31,8 @@ class Sensors(object):
         self.collision = self.add_sensors(world, vehicle, 'sensor.other.collision')
         self.lane_invasion = self.add_sensors(world, vehicle, 'sensor.other.lane_invasion', sensor_tick = '0.5')
 
+        self.sensor_list = [self.camera_rgb, self.collision, self.lane_invasion]
+
         self.collision.listen(lambda collisionEvent: self.track_collision(collisionEvent))
         self.camera_rgb.listen(lambda image: self.camera_queue.put(image))
         self.lane_invasion.listen(lambda event: self.on_invasion(event))
@@ -66,6 +68,12 @@ class Sensors(object):
         text = ['%r' % str(x).split()[-1] for x in lane_types]
         self.lane_crossed_type = text[0]
         self.lane_crossed = True
+
+    def destroy_sensors(self):
+        '''Destroy all sensors (Carla actors)'''
+        for sensor in self.sensor_list:
+            sensor.destroy()
+
 
 # ==============================================================================
 # -- Function approximation models ---------------------------------------------

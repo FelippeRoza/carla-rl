@@ -17,6 +17,7 @@ from rl_utils import DDDQNet, SumTree, Memory, map_action, reset_environment
 from rl_utils import process_image, compute_reward, isDone, get_split_batch
 from rl_config import hyperParameters
 
+
 def render(clock, world, display):
     clock.tick_busy_loop(30) # this sets the maximum client fps
     world.tick(clock)
@@ -222,8 +223,7 @@ def control_loop(vehicle_id, host, port, test_flag):
             train_loop(rl_config, vehicle, map, sensors)
 
     finally:
-        for actor in actor_list:
-            actor.destroy()
+        sensors.destroy_sensors()
 
 
 def render_loop(args):
