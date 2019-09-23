@@ -54,11 +54,11 @@ def train_loop(rl_config, vehicle, map, sensors):
 
     configProto = init_tensorflow()
     # instantiate the DQN target networks
-    DQNetwork = DDDQNet(rl_config.state_size, rl_config.action_size, rl_config.learning_rate, name=rl_config.model_name)
-    TargetNetwork = DDDQNet(rl_config.state_size, rl_config.action_size, rl_config.learning_rate, name="TargetNetwork")
+    DQNetwork = DDDQNet(rl_config.state_size, rl_config.action_space, rl_config.learning_rate, name=rl_config.model_name)
+    TargetNetwork = DDDQNet(rl_config.state_size, rl_config.action_space, rl_config.learning_rate, name="TargetNetwork")
 
     #tensorflow summary for tensorboard visualization
-    writer = tf.summary.FileWriter(".rl/summary")
+    writer = tf.summary.FileWriter("summary")
     # losses
     tf.summary.scalar("Loss", DQNetwork.loss)
     tf.summary.scalar("Hubor_loss", DQNetwork.loss_2)
@@ -67,13 +67,13 @@ def train_loop(rl_config, vehicle, map, sensors):
     saver = tf.train.Saver()
 
     # initialize memory and fill it with examples, for prioritized replay
-    memory = Memory(rl_config.memory_size, rl_config.pretrain_length, rl_config.action_size)
+    memory = Memory(rl_config.memory_size, rl_config.pretrain_length, rl_config.action_space)
     if rl_config.load_memory:
         memory = memory.load_memory(rl_config.memory_load_path)
         print("Memory Loaded")
     else:
         #this can take a looong time
-        memory.fill_memory(map, vehicle, sensors.camera_queue, sensors)
+        memory.fill_memory(map, vehicle, sensors.camera_queue, sensors, autopilot=True)
         memory.save_memory(rl_config.memory_save_path, memory)
 
     # Reinforcement Learning loop
@@ -106,8 +106,8 @@ def train_loop(rl_config, vehicle, map, sensors):
 
                 action_int, action, explore_probability = DQNetwork.predict_action(sess, rl_config.explore_start,
                                                                          rl_config.explore_stop, rl_config.decay_rate,
-                                                                         decay_step, state, rl_config.action_size)
-                car_controls = map_action(action_int)
+                                                                         decay_step, state, rl_config.action_space)
+                car_controls = map_action(action_int, rl_config.action_space)
                 vehicle.apply_control(car_controls)
                 time.sleep(0.25)
                 next_state = process_image(sensors.camera_queue)
@@ -191,7 +191,7 @@ def test_loop(rl_config, vehicle, map, sensors):
             #print(Qs)
             #print(action_int)
 
-            car_controls = map_action(action_int)
+            car_controls = map_action(action_int, rl_config.action_space)
             vehicle.apply_control(car_controls)
             reward = compute_reward(vehicle, sensors)
             episode_reward += reward

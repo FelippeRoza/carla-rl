@@ -8,8 +8,9 @@ class hyperParameters(object):
         # -- Hyperparameters ----------------------------------------------------------
         # ==============================================================================
         self.state_size = [84, 84, 1]
-        self.action_size = 6
-        self.possible_actions = np.identity(6, dtype=int).tolist()
+        # discrete action-space described as (throttle, steer, brake)
+        self.action_space = np.array([(0.0, 0.0, 1.0), (0.5, 0.0, 0.0), (1.0, 0.0, 0.0),
+                        (0.5, 0.25, 0.0), (0.5, -0.25, 0.0), (0.5, 0.5, 0.0), (0.5, -0.5, 0.0)])
         self.learning_rate= 0.00025
 
         # Training parameters
@@ -29,7 +30,7 @@ class hyperParameters(object):
         self.gamma = 0.95  # Discounting rate
         self.pretrain_length = 100000  ## Number of experiences stored in the Memory when initialized for the first time --INTIALLY 100k
         self.memory_size = 100000  # Number of experiences the Memory can keep  --INTIALLY 100k
-        self.load_memory = True
+        self.load_memory = True # If True load memory, otherwise fill the memory with new data
         self.memory_load_path = "replay_memory/memory.pkl"
         self.memory_save_path = "replay_memory/memory.pkl"
 

@@ -89,19 +89,20 @@ class DDDQNet():
     # THIS IS AN UPDATED VERSION, WHERE THE NUMBER OF FILTERS IS CHANGED AND THE ACTIVATION FUNCTION AS WELL
     # Kernel initalizer is also changed to variance scaling and the optimizer to adamoptimizer
 
-    def __init__(self, state_size, action_size, learning_rate, name):
+    def __init__(self, state_size, action_space, learning_rate, name):
         self.state_size = state_size
-        self.action_size = action_size
+        self.action_space = action_space
+        self.action_size = len(action_space)
+        self.possible_actions = np.identity(self.action_size, dtype=int).tolist()
         self.learning_rate = learning_rate
         self.name = name
-        self.possible_actions = np.identity(action_size, dtype=int).tolist()
         # we will use tf.variable_scope here to know which network we're usuing(DQN or target_net)
         # it will be useful when we update ourw-parameters (by copy the DQN parameters)
         with tf.variable_scope(self.name):
             # *state_size means that we take each element of state size in tuple hence is like if we wrote [None, 84,84,1]
             self.inputs_ = tf.placeholder(tf.float32, [None, *state_size], name="inputs")
             self.ISWeights_ = tf.placeholder(tf.float32, [None, 1], name="IS_Weights")
-            self.actions_ = tf.placeholder(tf.float32, [None, action_size], name="actions_")
+            self.actions_ = tf.placeholder(tf.float32, [None, self.action_size], name="actions_")
 
             # Remember that target_Q is the R(s,a) + ymax Qhat(s', a')
             self.target_Q = tf.placeholder(tf.float32, [None], name="target")
@@ -190,13 +191,13 @@ class DDDQNet():
             self.optimizer_2 = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss_2)
 
 
-    def predict_action(self, sess, explore_start, explore_stop, decay_rate, decay_step, state, action_size):
+    def predict_action(self, sess, explore_start, explore_stop, decay_rate, decay_step, state):
         # Epsilon greedy strategy: given state s, choose action a ep. greedy
         exp_tradeoff = np.random.rand()
         explore_probability = explore_stop + (explore_start - explore_stop) * np.exp(-decay_rate * decay_step)
 
         if (explore_probability > exp_tradeoff):
-            action_int = np.random.choice(action_size)
+            action_int = np.random.choice(self.action_size)
             action = self.possible_actions[action_int]
         else:
             # get action from Q-network: neural network estimates the Q values
@@ -321,7 +322,7 @@ class Memory(object):
     https://github.com/jaara/AI-blog/blob/master/Seaquest-DDQN-PER.py
     """
 
-    def __init__(self, capacity, pretrain_length, action_size):
+    def __init__(self, capacity, pretrain_length, action_space):
         """
         Remember that our tree is composed of a sum tree that contains the priority scores at his leaf
         And also a data array
@@ -331,8 +332,9 @@ class Memory(object):
 
         self.tree = SumTree(capacity)
         self.pretrain_length = pretrain_length
-        self.action_size = action_size
-        self.possible_actions = np.identity(action_size, dtype=int).tolist()
+        self.action_space = action_space
+        self.action_size = len(action_space)
+        self.possible_actions = np.identity(self.action_size, dtype=int).tolist()
         # hyperparamters
         self.absolute_error_upper = 1.  # clipped abs error
         self.PER_e = 0.01  # Hyperparameter that we use to avoid some experiences to have 0 probability of being taken
@@ -402,19 +404,29 @@ class Memory(object):
         for ti, p in zip(tree_idx, ps):
             self.tree.update(ti, p)
 
-    def fill_memory(self, map, vehicle, camera_queue, sensors):
+    def fill_memory(self, map, vehicle, camera_queue, sensors, autopilot = False):
+        '''Fill memory with experiences. If autopilot == True experience is given by autopilot,
+        otherwise agent takes random actions'''
         print("Started to fill memory")
         reset_environment(map, vehicle, sensors)
 
+        if autopilot:
+            vehicle.set_autopilot()
+
         for i in range(self.pretrain_length):
-            # random action
+
             if i % 500 == 0:
                 print(i, "experiences stored")
             state = process_image(camera_queue)
-            action_int = np.random.choice(self.action_size)
-            action = self.possible_actions[action_int]
-            car_controls = map_action(action_int)
-            vehicle.apply_control(car_controls)
+            if autopilot:
+                control = vehicle.get_control()
+                action = map_from_control(control, self.action_space)
+                print(action)
+            else:
+                action_int = np.random.choice(self.action_size)
+                action = self.possible_actions[action_int]
+                car_controls = map_action(action_int, self.action_space)
+                vehicle.apply_control(car_controls)
             time.sleep(0.25)
 
             reward = compute_reward(vehicle, sensors)
@@ -427,6 +439,9 @@ class Memory(object):
                 reset_environment(map, vehicle, sensors)
             else:
                 state = next_state
+
+        print('Finished filing memory. %s experiences stored.' % self.pretrain_length)
+        vehicle.set_autopilot(enabled = False)
 
     def save_memory(self, filename, object):
         handle = open(filename, "wb")
@@ -457,30 +472,27 @@ def get_split_batch(batch):
 
     return states_mb, actions_mb, rewards_mb, next_states_mb, dones_mb
 
-def map_action(action):
+def map_action(action, action_space):
     """ maps discrete actions into actual values to control the car"""
     control = carla.VehicleControl()
-    control.throttle = 0.3
-    control.brake = 0.0
-    if action == 0:
-        control.throttle = 0.5
-        control.brake = 0.0
-    if action == 1:
-        control.steer = 0.0
-    if action == 2:
-        control.throttle = 0.5
-        control.steer = 0.5
-    if action == 3:
-        control.throttle = 0.5
-        control.steer = -0.5
-    if action == 4:
-        control.throttle = 0.5
-        control.steer = 0.25
-    if action == 5:
-        control.throttle = 0.5
-        control.steer = -0.25
+    control_sequence = action_space[action]
+    control.throttle = control_sequence[0]
+    control.steer = control_sequence[1]
+    control.brake = control_sequence[2]
+
     return control
 
+def map_from_control(control, action_space):
+    '''maps continuous control to discrete action values
+    used to convert control from autopilot to discrete values that the Q-network is using
+    It works by computing the discrete action with the smaller euclidian distance from the
+    continuous actions'''
+    control_vector = np.array([control.throttle, control.steer, control.brake])
+    distances = [] # euclidian distance list
+    for control in action_space:
+        distances.append(np.linalg.norm(control-control_vector)) # compute euclidian distance
+
+    return np.argmin(distances)
 
 def reset_environment(map, vehicle, sensors):
     ''' Set the vehicle velocities to 0 and move it to a spawn point'''
