@@ -106,7 +106,7 @@ def train_loop(rl_config, vehicle, map, sensors):
 
                 action_int, action, explore_probability = DQNetwork.predict_action(sess, rl_config.explore_start,
                                                                          rl_config.explore_stop, rl_config.decay_rate,
-                                                                         decay_step, state, rl_config.action_space)
+                                                                         decay_step, state)
                 car_controls = map_action(action_int, rl_config.action_space)
                 vehicle.apply_control(car_controls)
                 time.sleep(0.25)

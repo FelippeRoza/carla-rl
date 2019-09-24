@@ -420,8 +420,8 @@ class Memory(object):
             state = process_image(camera_queue)
             if autopilot:
                 control = vehicle.get_control()
-                action = map_from_control(control, self.action_space)
-                print(action)
+                action_int = map_from_control(control, self.action_space)
+                action = self.possible_actions[action_int]
             else:
                 action_int = np.random.choice(self.action_size)
                 action = self.possible_actions[action_int]
