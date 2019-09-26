@@ -200,7 +200,7 @@ def test_loop(rl_config, vehicle, map, sensors):
             if done:
                 print("EPISODE ended", "TOTAL REWARD {:.4f}".format(episode_reward))
                 reset_environment(map, vehicle, sensors)
-                total_reward = 0
+                episode_reward = 0
 
             else:
                 time.sleep(0.25)
